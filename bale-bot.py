@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+bale-bot.py — دانلودر یوتیوب روی GitHub Actions برای ربات بله
+--------------------------------------------------------------
+Worker کلادفلر وقتی نمونه‌های cobalt شکست بخورند، با یک PAT این workflow را
+dispatch می‌کند؛ این اسکریپت روی رانر گیت‌هاب اجرا می‌شود:
+  ۱) ویدیو را با yt-dlp دانلود می‌کند (تا 720p mp4 یا mp3)
+  ۲) فایل را به Release کتابخانه (تگ library) می‌چسباند (تا ۲ گیگابایت)
+  ۳) لینک دائمی را در بله به همان چت می‌فرستد
+متغیرها (workflow ست می‌کند):
+  GH_TOKEN، BALE_TOKEN (Secret)، LIB_REPO، VID، MODE، QUALITY، CHAT_ID،
+  COOKIES (اختیاری — محتوای cookies.txt برای ویدیوهای بسیار قفل)
+"""
+import glob
+import json
+import os
+import re
+import subprocess
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+BALE_TOKEN = os.environ.get("BALE_TOKEN", "")
+GH_TOKEN = os.environ.get("GH_TOKEN", "")
+LIB_REPO = os.environ.get("LIB_REPO", "")
+LIB_TAG = os.environ.get("LIB_TAG", "library")
+VID = os.environ.get("VID", "")
+MODE = os.environ.get("MODE", "video")
+QUALITY = os.environ.get("QUALITY", "720")
+CHAT_ID = os.environ.get("CHAT_ID", "")
+COOKIES = os.environ.get("COOKIES", "")
+
+GH_API = "https://api.github.com"
+GH_UPLOAD = "https://uploads.github.com"
+MAX_BYTES = 2 * 1024 * 1024 * 1024 - 1024 * 1024   # سقف asset گیت‌هاب با حاشیه
+
+
+def bale_send(text):
+    """پیام به کاربر — کوشا؛ خطای ارسال نباید دانلود سالم را مردود کند"""
+    if not BALE_TOKEN or not CHAT_ID:
+        return
+    try:
+        req = urllib.request.Request(
+            f"https://tapi.bale.ai/bot{BALE_TOKEN}/sendMessage",
+            data=json.dumps({"chat_id": CHAT_ID, "text": text[:4000]}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=30)
+    except Exception as e:  # noqa: BLE001 — گزارش، نه توقف
+        print("[bale-bot] send failed:", e, flush=True)
+
+
+def gh(method, path, body=None):
+    """GET/POST/DELETE روی api.github.com — خروجی (status, json|None)"""
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        GH_API + path,
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {GH_TOKEN}",
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "User-Agent": "bale-bot",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            raw = r.read()
+            return r.status, (json.loads(raw) if raw else None)
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            return e.code, (json.loads(raw) if raw else None)
+        except Exception:
+            return e.code, None
+
+
+def gh_upload(path, filepath, content_type="application/octet-stream"):
+    """آپلود استریمی فایل به uploads.github.com — خروجی (status, json|None)"""
+    size = os.path.getsize(filepath)
+    f = open(filepath, "rb")
+    try:
+        req = urllib.request.Request(
+            GH_UPLOAD + path,
+            data=f,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {GH_TOKEN}",
+                "Accept": "application/vnd.github+json",
+                "Content-Type": content_type,
+                "Content-Length": str(size),
+                "User-Agent": "bale-bot",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=3600) as r:
+            raw = r.read()
+            return r.status, (json.loads(raw) if raw else None)
+    finally:
+        f.close()
+
+
+def clean_name(title, ext):
+    n = re.sub(r'[\\/:*?"<>|\r\n\t]', " ", str(title or "video")).strip()
+    n = re.sub(r"\s+", " ", n)[:80].strip() or "video"
+    if not re.search(r"\.[A-Za-z0-9]{2,5}$", n):
+        n += ext
+    return n
+
+
+def download(vid, mode, quality):
+    """yt-dlp با نردبان client ها؛ خروجی (مسیر فایل، عنوان) یا (None، پیام خطا)"""
+    url = f"https://www.youtube.com/watch?v={vid}"
+    cookie_args = []
+    if COOKIES:
+        with open("cookies.txt", "w") as f:
+            f.write(COOKIES)
+        cookie_args = ["--cookies", "cookies.txt"]
+
+    if mode == "audio":
+        fmt_args = ["-x", "--audio-format", "mp3"]
+    else:
+        q = quality if str(quality).isdigit() else "720"
+        fmt_args = ["-f", f"bv*[height<={q}][ext=mp4]+ba/bv*[height<={q}]+ba/b",
+                    "--merge-output-format", "mp4"]
+
+    ladder = [[], ["--extractor-args", "youtube:player_client=tv"],
+              ["--extractor-args", "youtube:player_client=android"]]
+    last_err = ""
+    for i, extra in enumerate(ladder):
+        out = f"out{i}"
+        cmd = ["yt-dlp", "--no-playlist", "--no-warnings",
+               "-o", f"{out}.%(ext)s", *fmt_args, *cookie_args, *extra, url]
+        print("[bale-bot] run:", " ".join(cmd[:8]), "...", flush=True)
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        except subprocess.TimeoutExpired:
+            last_err = "timeout"
+            continue
+        if p.returncode == 0:
+            files = [f for f in glob.glob(f"{out}.*") if not f.endswith(".part")]
+            if files:
+                big = max(files, key=os.path.getsize)
+                return big, vid
+        err = (p.stderr or "").lower()
+        last_err = err[-400:]
+        gated = "sign in" in err or "bot" in err or "login" in err
+        if gated and i == len(ladder) - 1:
+            return None, "gate"
+        # خطاهای دیگر یا قفل در تلاش‌های میانی → client بعدی
+    return None, ("gate" if ("sign in" in last_err or "bot" in last_err or "login" in last_err)
+                  else last_err or "unknown")
+
+
+def get_title(vid):
+    """عنوان برای نام فایل — از yt-dlp -J؛ کوشا"""
+    try:
+        p = subprocess.run(["yt-dlp", "-J", "--no-playlist", "--no-warnings",
+                            f"https://www.youtube.com/watch?v={vid}"],
+                           capture_output=True, text=True, timeout=60)
+        if p.returncode == 0:
+            return json.loads(p.stdout).get("title") or vid
+    except Exception:
+        pass
+    return vid
+
+
+def ensure_release():
+    st, data = gh("GET", f"/repos/{LIB_REPO}/releases/tags/{LIB_TAG}")
+    if st == 200 and data:
+        return data["id"]
+    if st == 404:
+        st2, data2 = gh("POST", f"/repos/{LIB_REPO}/releases",
+                        {"tag_name": LIB_TAG, "name": "کتابخانه", "body": "فیلم‌های کتابخانهٔ ربات بله"})
+        if st2 in (201, 200) and data2:
+            return data2["id"]
+        raise RuntimeError(f"release-create-{st2}")
+    raise RuntimeError(f"release-get-{st}")
+
+
+def upload_to_library(rel_id, filepath, filename):
+    """حذف asset هم‌نام قدیمی (نسخهٔ جدید) → آپلود → صبر تا uploaded → لینک"""
+    st, rel = gh("GET", f"/repos/{LIB_REPO}/releases/tags/{LIB_TAG}")
+    if st == 200 and rel:
+        for a in rel.get("assets", []):
+            if a.get("name") == filename:
+                gh("DELETE", f"/repos/{LIB_REPO}/releases/assets/{a['id']}")
+                print("[bale-bot] replaced old asset:", filename, flush=True)
+    st, asset = gh_upload(f"/repos/{LIB_REPO}/releases/{rel_id}/assets?name={urllib.parse.quote(filename)}", filepath)
+    if st not in (201, 200) or not asset:
+        raise RuntimeError(f"asset-upload-{st}")
+    for _ in range(30):  # آپلود گیت‌هاب ابتدا state=started است
+        st, a = gh("GET", f"/repos/{LIB_REPO}/releases/assets/{asset['id']}")
+        if st == 200 and a and a.get("state") == "uploaded":
+            return a.get("browser_download_url")
+        time.sleep(3)
+    return asset.get("browser_download_url")
+
+
+def main():
+    if not (GH_TOKEN and LIB_REPO and VID and CHAT_ID and BALE_TOKEN):
+        print("[bale-bot] missing env", flush=True)
+        bale_send("⚙️ تنظیم صف گیت‌هاب ناقص است (Secret یا متغیرها). README-github.txt را ببین.")
+        return 1
+    bale_send("🎬 دانلود روی سرور گیت‌هاب شروع شد؛ معمولاً چند دقیقه طول می‌کشد…")
+
+    path, info = download(VID, MODE, QUALITY)
+    if path is None:
+        if info == "gate":
+            bale_send("😕 این ویدیو حتی از سرور گیت‌هاب قفل «ورود» است.\n"
+                      "راه‌حل کامل: یک بار با اکانت بلااستفاده در مرورگری لاگین کن و محتوای cookies.txt را\n"
+                      "به‌عنوان Secret با نام COOKIES در همین مخزن بگذار (گزینهٔ G در README).")
+        else:
+            bale_send(f"😕 دانلود انجام نشد.\n(کد خطا: {str(info)[:200]})")
+        return 1
+
+    size = os.path.getsize(path)
+    if size > MAX_BYTES:
+        bale_send(f"😕 فایل بزرگ‌تر از سقف ۲ گیگابایت گیت‌هاب است ({size // (1024 * 1024)}MB).")
+        return 1
+
+    ext = ".mp3" if MODE == "audio" else ".mp4"
+    filename = clean_name(get_title(VID), ext)
+    try:
+        rel_id = ensure_release()
+        link = upload_to_library(rel_id, path, filename)
+    except Exception as e:  # noqa: BLE001
+        bale_send(f"😕 آپلود به کتابخانه شکست خورد.\n(کد خطا: {e})")
+        return 1
+
+    mb = max(1, size // (1024 * 1024))
+    bale_send(f"✅ آماده شد:\n📄 {filename} ({mb}MB)\n🔗 {link}\n"
+              f"این لینک دائمی است و از این به بعد در /list هم هست.")
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
