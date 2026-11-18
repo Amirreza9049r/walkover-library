@@ -133,6 +133,20 @@ def cookie_notes():
     return []
 
 
+def diagnose_fail(url):
+    """پروب تشخیصی -v -F بعد از شکست همهٔ تلاش‌ها: هشدارهای PO Token / EJS / solver و
+    وضعیت فرمت‌ها را از خروجی verbose بیرون می‌کشد تا خطای واقعی دیده شود"""
+    try:
+        p = subprocess.run(["yt-dlp", "-v", "-F", "--no-playlist", *write_cookies(), url],
+                           capture_output=True, text=True, timeout=180)
+    except Exception:
+        return []
+    out = (p.stdout or "") + "\n" + (p.stderr or "")
+    keys = ("po token", "pot", "ejs", "solver", "jsc", "runtime", "provider",
+            "warning", "sign in", "requested format", "available formats")
+    return [ln.strip() for ln in out.splitlines() if any(k in ln.lower() for k in keys)][-12:]
+
+
 def download(vid, mode, quality):
     """yt-dlp با نردبان client ها؛ خروجی (مسیر فایل، عنوان) یا (None، متن خطای کامل برای کاربر)"""
     url = f"https://www.youtube.com/watch?v={vid}"
@@ -187,11 +201,16 @@ def download(vid, mode, quality):
         print(f"[bale-bot]   ↳ {name}: {err_line}", flush=True)
 
     notes = cookie_notes()
+    probe = diagnose_fail(url)
+    for ln in probe:
+        print("[bale-bot] diagnose:", ln[:200], flush=True)
     lines = ["😕 دانلود روی سرور گیت‌هاب با همهٔ روش‌ها انجام نشد.", "تلاش‌ها:"]
     lines += [f"• {n}: {e}" for n, e in attempts]
+    if probe:
+        lines += ["", "🔍 تشخیص:"]
+        lines += [f"• {ln[:150]}" for ln in probe[-5:]]
     if notes:
-        lines.append("")
-        lines += [f"⚠️ {x}" for x in notes]
+        lines += ["", *[f"⚠️ {x}" for x in notes]]
     lines += ["", "معمول‌ترین رفع: کوکی تازهٔ لاگین‌شده (گزینهٔ G در README) و بعد دوباره فرستادن همان لینک."]
     return None, "\n".join(lines)
 
