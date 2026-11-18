@@ -39,8 +39,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install yt-dlp
-        run: python -m pip install --upgrade yt-dlp
+      # [default] مهم است: بستهٔ yt-dlp-ejs (حل‌کنندهٔ چالش/PO-Token یوتیوب) فقط
+      # با این اکسترا نصب می‌شود؛ بدون آن یوتیوب از IP دیتاسنتر فرمت‌ها را حذف می‌کند.
+      - name: Install yt-dlp + EJS solver
+        run: python -m pip install --upgrade "yt-dlp[default]"
 
       - name: Download and serve
         env:
