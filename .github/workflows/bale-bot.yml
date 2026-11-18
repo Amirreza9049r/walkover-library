@@ -1,0 +1,56 @@
+# bale-bot.yml — دانلودر یوتیوب روی گیت‌هاب برای ربات بله
+# Worker کلادفلر این workflow را dispatch می‌کند؛ اجرای آن:
+#   yt-dlp دانلود → فایل به Release کتابخانه (تگ library) → لینک دائمی به کاربر در بله
+name: bale-bot
+
+on:
+  workflow_dispatch:
+    inputs:
+      vid:
+        description: 'YouTube video id'
+        required: true
+      mode:
+        description: 'video | audio'
+        required: false
+        default: 'video'
+      quality:
+        description: 'max height (240..720)'
+        required: false
+        default: '720'
+      chat_id:
+        description: 'Bale chat id'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bale-bot
+  cancel-in-progress: false   # درخواست‌های جدید صف می‌شوند، نه لغو
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install yt-dlp
+        run: python -m pip install --upgrade yt-dlp
+
+      - name: Download and serve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BALE_TOKEN: ${{ secrets.BALE_TOKEN }}
+          COOKIES: ${{ secrets.COOKIES }}
+          LIB_REPO: ${{ github.repository }}
+          LIB_TAG: library
+          VID: ${{ github.event.inputs.vid }}
+          MODE: ${{ github.event.inputs.mode }}
+          QUALITY: ${{ github.event.inputs.quality }}
+          CHAT_ID: ${{ github.event.inputs.chat_id }}
+        run: python bale-bot.py
