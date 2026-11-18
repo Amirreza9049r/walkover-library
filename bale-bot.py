@@ -5,7 +5,7 @@ bale-bot.py — دانلودر یوتیوب روی GitHub Actions برای رب�
 --------------------------------------------------------------
 Worker کلادفلر وقتی نمونه‌های cobalt شکست بخورند، با یک PAT این workflow را
 dispatch می‌کند؛ این اسکریپت روی رانر گیت‌هاب اجرا می‌شود:
-  ۱) ویدیو را با yt-dlp دانلود می‌کند (تا 720p mp4 یا mp3)
+  ۱) ویدیو را با yt-dlp دانلود می‌کند (تا 720p mp4 یا mp3) — با نردبان ۵ کلاینت
   ۲) فایل را به Release کتابخانه (تگ library) می‌چسباند (تا ۲ گیگابایت)
   ۳) لینک دائمی را در بله به همان چت می‌فرستد
 متغیرها (workflow ست می‌کند):
@@ -110,14 +110,33 @@ def clean_name(title, ext):
     return n
 
 
+def write_cookies():
+    """در صورت وجود COOKIES آن را در cookies.txt می‌نویسد و آرگومان‌های مربوط را می‌دهد"""
+    if not COOKIES:
+        return []
+    with open("cookies.txt", "w", encoding="utf-8") as f:
+        f.write(COOKIES.lstrip().lstrip("﻿"))  # BOM احتمالی paste را هم پاک کن
+    return ["--cookies", "cookies.txt"]
+
+
+def cookie_notes():
+    """اگر حال‌واحوای کوکی مشکوک است، یادداشت‌های تشخیصی فارسی بده — وگرنه []"""
+    if not COOKIES:
+        return ["کوکی (Secret با نام COOKIES) ست نشده — ویدیوهای قفل از سرور گیت‌هاب "
+                "بدون نشست لاگین معمولاً باز نمی‌شوند (گزینهٔ G در README)."]
+    if COOKIES.lstrip().startswith("["):
+        return ["فرمت فایل کوکی JSON است — در افزونه گزینهٔ Export (فرمت Netscape) را بزن؛ "
+                "فایل درست باید با «# Netscape HTTP Cookie File» شروع شود."]
+    if "LOGIN_INFO" not in COOKIES:
+        return ["کوکی نشست لاگین ندارد (احتمالاً بدون لاگین Export شده) — در مرورگر به یوتیوب "
+                "با اکانت بلااستفاده لاگین کن و دوباره Export بگیر."]
+    return []
+
+
 def download(vid, mode, quality):
-    """yt-dlp با نردبان client ها؛ خروجی (مسیر فایل، عنوان) یا (None، پیام خطا)"""
+    """yt-dlp با نردبان client ها؛ خروجی (مسیر فایل، عنوان) یا (None، متن خطای کامل برای کاربر)"""
     url = f"https://www.youtube.com/watch?v={vid}"
-    cookie_args = []
-    if COOKIES:
-        with open("cookies.txt", "w") as f:
-            f.write(COOKIES)
-        cookie_args = ["--cookies", "cookies.txt"]
+    cookie_args = write_cookies()
 
     if mode == "audio":
         fmt_args = ["-x", "--audio-format", "mp3"]
@@ -126,38 +145,61 @@ def download(vid, mode, quality):
         fmt_args = ["-f", f"bv*[height<={q}][ext=mp4]+ba/bv*[height<={q}]+ba/b",
                     "--merge-output-format", "mp4"]
 
-    ladder = [[], ["--extractor-args", "youtube:player_client=tv"],
-              ["--extractor-args", "youtube:player_client=android"]]
-    last_err = ""
-    for i, extra in enumerate(ladder):
+    # نردبان کلاینت‌ها — همه نام‌های معتبر نسخهٔ فعلی yt-dlp (اکتبر ۲۰۲۶):
+    #   پیش‌فرض اول می‌آید تا انتخاب خود yt-dlp و کوکی اثر کند؛ بعد خانوادهٔ tv
+    #   (دوست‌دار IP دیتاسنتر)، بعد visionos و android_vr.
+    # «requested format is not available» خطای انتخاب‌گر است و yt-dlp خودش روی آن
+    # کلاینت بعدی را امتحان نمی‌کند — پس نردبان را صریح خودمان می‌چرخانیم.
+    ladder = [
+        ("پیش‌فرض", []),
+        ("tv_simply", ["--extractor-args", "youtube:player_client=tv_simply"]),
+        ("tv", ["--extractor-args", "youtube:player_client=tv"]),
+        ("visionos", ["--extractor-args", "youtube:player_client=visionos"]),
+        ("android_vr", ["--extractor-args", "youtube:player_client=android_vr"]),
+    ]
+
+    attempts = []
+    for i, (name, extra) in enumerate(ladder):
         out = f"out{i}"
         cmd = ["yt-dlp", "--no-playlist", "--no-warnings",
                "-o", f"{out}.%(ext)s", *fmt_args, *cookie_args, *extra, url]
-        print("[bale-bot] run:", " ".join(cmd[:8]), "...", flush=True)
+        print(f"[bale-bot] attempt {i + 1}/{len(ladder)} ({name}):",
+              " ".join(cmd[:8]), "...", flush=True)
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=420)
         except subprocess.TimeoutExpired:
-            last_err = "timeout"
+            attempts.append((name, "timeout پس از ۷ دقیقه"))
+            print("[bale-bot]   ↳ timeout", flush=True)
             continue
         if p.returncode == 0:
             files = [f for f in glob.glob(f"{out}.*") if not f.endswith(".part")]
             if files:
-                big = max(files, key=os.path.getsize)
-                return big, vid
-        err = (p.stderr or "").lower()
-        last_err = err[-400:]
-        gated = "sign in" in err or "bot" in err or "login" in err
-        if gated and i == len(ladder) - 1:
-            return None, "gate"
-        # خطاهای دیگر یا قفل در تلاش‌های میانی → client بعدی
-    return None, ("gate" if ("sign in" in last_err or "bot" in last_err or "login" in last_err)
-                  else last_err or "unknown")
+                return max(files, key=os.path.getsize), vid
+            attempts.append((name, "exit 0 ولی فایل پیدا نشد"))
+            continue
+        err_line = ""
+        for ln in reversed((p.stderr or "").strip().splitlines()):
+            if ln.strip():
+                err_line = ln.strip()
+                break
+        err_line = re.sub(r"^ERROR:\s*", "", err_line)[:140] or f"exit {p.returncode} بدون پیام"
+        attempts.append((name, err_line))
+        print(f"[bale-bot]   ↳ {name}: {err_line}", flush=True)
+
+    notes = cookie_notes()
+    lines = ["😕 دانلود روی سرور گیت‌هاب با همهٔ روش‌ها انجام نشد.", "تلاش‌ها:"]
+    lines += [f"• {n}: {e}" for n, e in attempts]
+    if notes:
+        lines.append("")
+        lines += [f"⚠️ {x}" for x in notes]
+    lines += ["", "معمول‌ترین رفع: کوکی تازهٔ لاگین‌شده (گزینهٔ G در README) و بعد دوباره فرستادن همان لینک."]
+    return None, "\n".join(lines)
 
 
 def get_title(vid):
     """عنوان برای نام فایل — از yt-dlp -J؛ کوشا"""
     try:
-        p = subprocess.run(["yt-dlp", "-J", "--no-playlist", "--no-warnings",
+        p = subprocess.run(["yt-dlp", "-J", "--no-playlist", "--no-warnings", *write_cookies(),
                             f"https://www.youtube.com/watch?v={vid}"],
                            capture_output=True, text=True, timeout=60)
         if p.returncode == 0:
@@ -206,14 +248,14 @@ def main():
         return 1
     bale_send("🎬 دانلود روی سرور گیت‌هاب شروع شد؛ معمولاً چند دقیقه طول می‌کشد…")
 
+    # اگر کوکی مشکوک است، همان اول بگو تا کاربر همزمان با اجرا درستش کند
+    notes = cookie_notes()
+    if notes:
+        bale_send("⚠️ پیش از دانلود: " + notes[0])
+
     path, info = download(VID, MODE, QUALITY)
     if path is None:
-        if info == "gate":
-            bale_send("😕 این ویدیو حتی از سرور گیت‌هاب قفل «ورود» است.\n"
-                      "راه‌حل کامل: یک بار با اکانت بلااستفاده در مرورگری لاگین کن و محتوای cookies.txt را\n"
-                      "به‌عنوان Secret با نام COOKIES در همین مخزن بگذار (گزینهٔ G در README).")
-        else:
-            bale_send(f"😕 دانلود انجام نشد.\n(کد خطا: {str(info)[:200]})")
+        bale_send(info)
         return 1
 
     size = os.path.getsize(path)
