@@ -178,10 +178,11 @@ def download(vid, mode, quality):
     for i, (name, extra) in enumerate(ladder):
         out = f"out{i}"
         # --concurrent-fragments 4: دانلود ۴ فرگمنت موازی (۲-۴ برابر سریع‌تر)
-        # --print "%(title)s": عنوان را در stdout می‌نویسد تا فراخوانی جدا yt-dlp -J حذف شود
+        # --print "after_move:%(title)s": بعد از اتمام دانلود و move، عنوان رو چاپ می‌کنه
+        #   نکته: بدون prefix یعنی after_move، --print imply simulate می‌کرد و دانلود نمی‌شد!
         cmd = ["yt-dlp", "--no-playlist", "--no-warnings",
                "--concurrent-fragments", "4",
-               "--print", "%(title)s",
+               "--print", "after_move:%(title)s",
                "-o", f"{out}.%(ext)s", *fmt_args, *cookie_args, *extra, url]
         print(f"[bale-bot] attempt {i + 1}/{len(ladder)} ({name}):",
               " ".join(cmd[:8]), "...", flush=True)
