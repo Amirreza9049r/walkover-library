@@ -192,6 +192,12 @@ def download(vid, mode, quality):
             attempts.append((name, "timeout پس از ۷ دقیقه"))
             print("[bale-bot]   ↳ timeout", flush=True)
             continue
+        except Exception as e:
+            # خطاهای غیر TimeoutExpired (مثل FileNotFoundError اگر yt-dlp تو PATH نباشه)
+            err = f"subprocess error: {type(e).__name__}: {e}"
+            attempts.append((name, err[:140]))
+            print(f"[bale-bot]   ↳ {name}: {err}", flush=True)
+            continue
         if p.returncode == 0:
             files = [f for f in glob.glob(f"{out}.*") if not f.endswith(".part")]
             if files:
