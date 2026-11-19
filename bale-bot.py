@@ -253,14 +253,39 @@ def ensure_release():
 
 def upload_to_library(rel_id, filepath, filename):
     """اگه فایل هم‌نام از قبل تو کتابخانه هست، همان لینک قبلی برگردانده می‌شود
-    (هیچ‌چیز حذف نمی‌شود)؛ وگرنه آپلود می‌شود → صبر تا uploaded → لینک."""
-    st, rel = gh("GET", f"/repos/{LIB_REPO}/releases/tags/{LIB_TAG}")
-    if st == 200 and rel:
+    (هیچ‌چیز حذف نمی‌شود)؛ وگرنه آپلود می‌شود → صبر تا uploaded → لینک.
+    در صورت 422 (تکرار نام که pre-check ندید)، دوباره جست‌وجو می‌کند."""
+    def find_existing():
+        st, rel = gh("GET", f"/repos/{LIB_REPO}/releases/tags/{LIB_TAG}")
+        if st != 200 or not rel:
+            return None
         for a in rel.get("assets", []):
             if a.get("name") == filename:
-                print("[bale-bot] already in library — returning existing link:", filename, flush=True)
-                return a.get("browser_download_url")
+                return a
+        return None
+
+    # pre-check: اگه هست، آپلود نزن
+    existing = find_existing()
+    if existing:
+        print("[bale-bot] already in library — returning existing link:", filename, flush=True)
+        return existing.get("browser_download_url")
+
+    # آپلود
     st, asset = gh_upload(f"/repos/{LIB_REPO}/releases/{rel_id}/assets?name={urllib.parse.quote(filename)}", filepath)
+
+    # 422 = تکرار نام (گاهی pre-check به‌خاطر cache یا race وقتش نمی‌رسه ببینه)
+    if st == 422:
+        print(f"[bale-bot] got 422 — re-checking for existing asset '{filename}'", flush=True)
+        existing = find_existing()
+        if existing:
+            print("[bale-bot] found after 422:", existing.get("name"), flush=True)
+            return existing.get("browser_download_url")
+        # اگه واقعاً پیدا نشد، لیست اسم‌ها رو چاپ کن برای دیباگ
+        st2, rel2 = gh("GET", f"/repos/{LIB_REPO}/releases/tags/{LIB_TAG}")
+        if st2 == 200 and rel2:
+            names = [a.get("name") for a in rel2.get("assets", [])]
+            print("[bale-bot] assets currently in library:", names, flush=True)
+
     if st not in (201, 200) or not asset:
         raise RuntimeError(f"asset-upload-{st}")
     for _ in range(30):  # آپلود گیت‌هاب ابتدا state=started است
