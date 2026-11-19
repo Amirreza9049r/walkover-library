@@ -261,8 +261,10 @@ def upload_to_library(rel_id, filepath, filename):
     """اگه فایل هم‌نام از قبل تو کتابخانه هست، همان لینک قبلی برگردانده می‌شود
     (هیچ‌چیز حذف نمی‌شود)؛ وگرنه آپلود می‌شود → صبر تا uploaded → لینک.
     در صورت 422 (تکرار نام که pre-check ندید)، دوباره جست‌وجو می‌کند."""
+    print(f"[bale-bot] upload_to_library: filename='{filename}', size={os.path.getsize(filepath)} bytes", flush=True)
     def find_existing():
         st, rel = gh("GET", f"/repos/{LIB_REPO}/releases/tags/{LIB_TAG}")
+        print(f"[bale-bot]   GET release: status={st}, assets={len(rel.get('assets', [])) if (st == 200 and rel) else 'N/A'}", flush=True)
         if st != 200 or not rel:
             return None
         for a in rel.get("assets", []):
@@ -277,7 +279,9 @@ def upload_to_library(rel_id, filepath, filename):
         return existing.get("browser_download_url")
 
     # آپلود
+    print(f"[bale-bot]   POST upload to release {rel_id}...", flush=True)
     st, asset = gh_upload(f"/repos/{LIB_REPO}/releases/{rel_id}/assets?name={urllib.parse.quote(filename)}", filepath)
+    print(f"[bale-bot]   upload response: status={st}", flush=True)
 
     # 422 = تکرار نام (گاهی pre-check به‌خاطر cache یا race وقتش نمی‌رسه ببینه)
     if st == 422:
@@ -331,6 +335,8 @@ def main():
         rel_id = ensure_release()
         link = upload_to_library(rel_id, path, filename)
     except Exception as e:  # noqa: BLE001
+        # خطا هم تو workflow log چاپ شه (نه فقط بله) تا بشه دیباگ کرد
+        print(f"[bale-bot] UPLOAD FAILED: {type(e).__name__}: {e}", flush=True)
         bale_send(f"😕 آپلود به کتابخانه شکست خورد.\n(کد خطا: {e})")
         return 1
 
