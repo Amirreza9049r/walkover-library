@@ -244,13 +244,14 @@ def ensure_release():
 
 
 def upload_to_library(rel_id, filepath, filename):
-    """حذف asset هم‌نام قدیمی (نسخهٔ جدید) → آپلود → صبر تا uploaded → لینک"""
+    """اگه فایل هم‌نام از قبل تو کتابخانه هست، همان لینک قبلی برگردانده می‌شود
+    (هیچ‌چیز حذف نمی‌شود)؛ وگرنه آپلود می‌شود → صبر تا uploaded → لینک."""
     st, rel = gh("GET", f"/repos/{LIB_REPO}/releases/tags/{LIB_TAG}")
     if st == 200 and rel:
         for a in rel.get("assets", []):
             if a.get("name") == filename:
-                gh("DELETE", f"/repos/{LIB_REPO}/releases/assets/{a['id']}")
-                print("[bale-bot] replaced old asset:", filename, flush=True)
+                print("[bale-bot] already in library — returning existing link:", filename, flush=True)
+                return a.get("browser_download_url")
     st, asset = gh_upload(f"/repos/{LIB_REPO}/releases/{rel_id}/assets?name={urllib.parse.quote(filename)}", filepath)
     if st not in (201, 200) or not asset:
         raise RuntimeError(f"asset-upload-{st}")
