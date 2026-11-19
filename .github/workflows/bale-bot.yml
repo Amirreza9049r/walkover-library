@@ -1,23 +1,27 @@
 # bale-bot.yml — دانلودر یوتیوب روی گیت‌هاب برای ربات بله
 # Worker کلادفلر این workflow را dispatch می‌کند؛ اجرای آن:
 #   yt-dlp دانلود → فایل به Release کتابخانه (تگ library) → لینک دائمی به کاربر در بله
+# پیش‌نیازها (README-github.txt):
+#   - این فایل در مسیر .github/workflows/bale-bot.yml مخزن باشد
+#   - Secret با نام BALE_TOKEN (توکن ربات بله) — اختیاری بعداً: COOKIES
 name: bale-bot
 
 on:
   workflow_dispatch:
     inputs:
-      VID:
+      # نام اینپوت‌ها باید دقیقاً lowercase باشد — worker.js با همین حروف dispatch می‌کند
+      vid:
         description: 'YouTube video id'
         required: true
-      MODE:
+      mode:
         description: 'video | audio'
         required: false
         default: 'video'
-      QUALITY:
+      quality:
         description: 'max height (240..720)'
         required: false
         default: '720'
-      CHAT_ID:
+      chat_id:
         description: 'Bale chat id'
         required: true
 
@@ -39,9 +43,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      # [default] بستهٔ yt-dlp-ejs (اسکریپت‌های حل‌کنندهٔ چالش یوتیوب) را نصب می‌کند
-      # [deno]    خودِ ران‌تایم JavaScript (بستهٔ رسمی denoland) را نصب می‌کند؛
-      #           بدون آن yt-dlp چالش n را حل نمی‌کند و «فقط images» می‌بیند
+      # [default] بستهٔ yt-dlp-ejs (حل‌کنندهٔ چالش/PO-Token) و [deno] ران‌تایم deno را
+      # نصب می‌کند؛ بدون ران‌تایم JS، یوتیوب از IP دیتاسنتر فقط تصاویر storyboard می‌دهد.
       - name: Install yt-dlp + EJS solver + Deno runtime
         run: |
           python -m pip install --upgrade "yt-dlp[default,deno]"
@@ -55,8 +58,8 @@ jobs:
           COOKIES: ${{ secrets.COOKIES }}
           LIB_REPO: ${{ github.repository }}
           LIB_TAG: library
-          VID: ${{ github.event.inputs.VID }}
-          MODE: ${{ github.event.inputs.MODE }}
-          QUALITY: ${{ github.event.inputs.QUALITY }}
-          CHAT_ID: ${{ github.event.inputs.CHAT_ID }}
+          VID: ${{ github.event.inputs.vid }}
+          MODE: ${{ github.event.inputs.mode }}
+          QUALITY: ${{ github.event.inputs.quality }}
+          CHAT_ID: ${{ github.event.inputs.chat_id }}
         run: python bale-bot.py
