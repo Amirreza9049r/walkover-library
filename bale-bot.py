@@ -156,7 +156,9 @@ def download(vid, mode, quality):
         fmt_args = ["-x", "--audio-format", "mp3"]
     else:
         q = quality if str(quality).isdigit() else "720"
-        fmt_args = ["-f", f"bv*[height<={q}][ext=mp4]+ba/bv*[height<={q}]+ba/b",
+        # محدودیت [ext=mp4] را برداشتیم: اگر برای کلاینتی فقط webm بدهد نردبان نچسبد؛
+        # ظرف نهایی همان mp4 می‌ماند چون --merge-output-format mp4 سر جایش است.
+        fmt_args = ["-f", f"bv*[height<={q}]+ba/b[height<={q}]/bv*+ba/b",
                     "--merge-output-format", "mp4"]
 
     # نردبان کلاینت‌ها — همه نام‌های معتبر نسخهٔ فعلی yt-dlp (اکتبر ۲۰۲۶):
