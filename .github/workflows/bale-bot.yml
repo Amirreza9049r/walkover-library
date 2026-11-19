@@ -45,11 +45,16 @@ jobs:
 
       # [default] بستهٔ yt-dlp-ejs (حل‌کنندهٔ چالش/PO-Token) و [deno] ران‌تایم deno را
       # نصب می‌کند؛ بدون ران‌تایم JS، یوتیوب از IP دیتاسنتر فقط تصاویر storyboard می‌دهد.
-      - name: Install yt-dlp + EJS solver + Deno runtime
+      # ffmpeg/ffprobe برای ادغام استریم ویدیو+صدا (DASH) لازم است؛ بدون آن فیلم بی‌صدا می‌شود.
+      - name: Install yt-dlp + EJS solver + Deno runtime + ffmpeg
         run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
           python -m pip install --upgrade "yt-dlp[default,deno]"
           python -m yt_dlp --version
           deno --version
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
 
       - name: Download and serve
         env:
